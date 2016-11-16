@@ -15,6 +15,8 @@ class AIOWPSecurity_User_Login
         remove_filter('authenticate', 'wp_authenticate_username_password', 20, 3);
         remove_filter('authenticate', 'wp_authenticate_email_password', 20, 3);
         add_filter('authenticate', array(&$this, 'aiowp_auth_login'), 10, 3);
+        // As a last authentication step, perform post authentication steps
+        add_filter('authenticate', array($this, 'post_authenticate'), 100, 3);
         add_action('aiowps_force_logout_check', array(&$this, 'aiowps_force_logout_action_handler'));
         //add_action('wp_login', array(&$this, 'wp_login_action_handler'), 10, 2);
         add_action('clear_auth_cookie', array(&$this, 'wp_logout_action_handler'));
@@ -64,7 +66,6 @@ class AIOWPSecurity_User_Login
     function aiowp_auth_login($user, $username, $password)
     {
         global $wpdb, $aio_wp_security;
-        $login_attempts_permitted = $aio_wp_security->configs->get_value('aiowps_max_login_attempts');
 
         //Check if captcha enabled
         if ($aio_wp_security->configs->get_value('aiowps_enable_login_captcha') == '1')
@@ -84,19 +85,6 @@ class AIOWPSecurity_User_Login
 
                 if($submitted_encoded_string !== $captcha_string_info_trans)
                 {
-                    //This means a wrong answer was entered
-                    $this->increment_failed_logins($username);
-                    if($aio_wp_security->configs->get_value('aiowps_enable_login_lockdown')=='1')
-                    {
-                        if($login_attempts_permitted <= $this->get_login_fail_count())
-                        {
-                            $this->lock_the_user($username, 'login_fail');
-                        }
-                        else
-                        {
-                            return new WP_Error('authentication_failed', __('<strong>ERROR</strong>: Your answer was incorrect - please try again.', 'all-in-one-wp-security-and-firewall'));
-                        }
-                    }
                     return new WP_Error('authentication_failed', __('<strong>ERROR</strong>: Your answer was incorrect - please try again.', 'all-in-one-wp-security-and-firewall'));
                 }
             }else if(isset($_POST['wp-submit']) && !isset($_POST['aiowps-captcha-answer'])){
@@ -122,34 +110,9 @@ class AIOWPSecurity_User_Login
         $userdata = get_user_by('login',$username);
         if (!$userdata) 
         {
-            //This means an unknown username is being used for login
-            $this->increment_failed_logins($username);
-            if($aio_wp_security->configs->get_value('aiowps_enable_login_lockdown')=='1')
-            {
-                $too_many_failed_logins = $login_attempts_permitted <= $this->get_login_fail_count();
-                $invalid_username_lockdown = $aio_wp_security->configs->get_value('aiowps_enable_invalid_username_lockdown') == '1';
-                
-                $instant_lockout_users_list = $aio_wp_security->configs->get_value('aiowps_instantly_lockout_specific_usernames');
-                if(empty($instant_lockout_users_list)){
-                    $instant_lockout_users_list = array();
-                }
-                $username_blacklisted = in_array($username, $instant_lockout_users_list);
+            return new WP_Error('invalid_username', __('<strong>ERROR</strong>: Invalid username.', 'all-in-one-wp-security-and-firewall'));
+        }
 
-                if ( $too_many_failed_logins || $invalid_username_lockdown || $username_blacklisted )
-                {                  
-                    $this->lock_the_user($username, 'login_fail');
-                }
-            }
-            if($aio_wp_security->configs->get_value('aiowps_set_generic_login_msg')=='1')
-            {
-                //Return generic error message if configured
-                return new WP_Error('authentication_failed', __('<strong>ERROR</strong>: Invalid login credentials.', 'all-in-one-wp-security-and-firewall'));
-            } else
-            {
-                return new WP_Error('invalid_username', __('<strong>ERROR</strong>: Invalid username.', 'all-in-one-wp-security-and-firewall'));
-            }
-	}
-        
         $userdata = apply_filters('wp_authenticate_user', $userdata, $password); //Existing WP core code
         if ( is_wp_error($userdata) ) { //Existing WP core code
                 return $userdata;
@@ -157,23 +120,7 @@ class AIOWPSecurity_User_Login
 
         if ( !wp_check_password($password, $userdata->user_pass, $userdata->ID) ) 
         {
-            //This means wrong password was entered
-            $this->increment_failed_logins($username);
-            if($aio_wp_security->configs->get_value('aiowps_enable_login_lockdown')=='1')
-            {
-                if($login_attempts_permitted <= $this->get_login_fail_count())
-                {
-                    $this->lock_the_user($username, 'login_fail');
-                }
-            }
-            if($aio_wp_security->configs->get_value('aiowps_set_generic_login_msg')=='1')
-            {
-                //Return generic error message if configured
-                return new WP_Error('authentication_failed', __('<strong>ERROR</strong>: Invalid login credentials.', 'all-in-one-wp-security-and-firewall'));
-            } else 
-            {
-                return new WP_Error('incorrect_password', sprintf(__('<strong>ERROR</strong>: Incorrect password. <a href="%s" title="Password Lost and Found">Lost your password</a>?', 'all-in-one-wp-security-and-firewall'), site_url('wp-login.php?action=lostpassword', 'login')));
-            }
+            return new WP_Error('incorrect_password', sprintf(__('<strong>ERROR</strong>: Incorrect password. <a href="%s" title="Password Lost and Found">Lost your password</a>?', 'all-in-one-wp-security-and-firewall'), site_url('wp-login.php?action=lostpassword', 'login')));
         }
         
         //Check if auto pending new account status feature is enabled
@@ -207,6 +154,69 @@ class AIOWPSecurity_User_Login
                                         "failed_login_ip LIKE '" . esc_sql($ip_range) . "%'", ARRAY_A);
         return $locked_user;
     }
+
+
+    /**
+     * Handle post authentication steps (in case of failed login):
+     * - increment number of failed logins for $username
+     * - (optionally) lock the user
+     * - (optionally) display a generic error message
+     * @global AIO_WP_Security $aio_wp_security
+     * @param WP_Error|WP_User $user
+     * @param string $username
+     * @param string $password
+     * @return WP_Error|WP_User
+     */
+    function post_authenticate($user, $username, $password)
+    {
+        global $aio_wp_security;
+
+        if ( !is_wp_error($user) ) {
+            return $user;
+        }
+
+        if ( empty($username) || empty($password) ) {
+            return $user;
+        }
+
+        // Login failed for non-trivial reason
+        $this->increment_failed_logins($username);
+
+        if ( $aio_wp_security->configs->get_value('aiowps_enable_login_lockdown') == '1' )
+        {
+            // Too many failed logins from user's IP?
+            $login_attempts_permitted = absint($aio_wp_security->configs->get_value('aiowps_max_login_attempts'));
+            $too_many_failed_logins = $login_attempts_permitted <= $this->get_login_fail_count();
+
+            // Is an invalid username or email the reason for login error?
+            $invalid_username = ($user->get_error_code() === 'invalid_username' || $user->get_error_code() == 'invalid_email');
+
+            // Should an invalid username be immediately locked?
+            $invalid_username_lockdown = $aio_wp_security->configs->get_value('aiowps_enable_invalid_username_lockdown') == '1';
+            $lock_invalid_username = $invalid_username && $invalid_username_lockdown;
+
+            // Should an invalid username be blocked as per blacklist?
+            $instant_lockout_users_list = $aio_wp_security->configs->get_value('aiowps_instantly_lockout_specific_usernames');
+            if ( !is_array($instant_lockout_users_list) ) {
+                $instant_lockout_users_list = array();
+            }
+            $username_blacklisted = $invalid_username && in_array($username, $instant_lockout_users_list);
+
+            if ( $too_many_failed_logins || $lock_invalid_username || $username_blacklisted )
+            {
+                $this->lock_the_user($username, 'login_fail');
+            }
+        }
+
+        if ( $aio_wp_security->configs->get_value('aiowps_set_generic_login_msg') == '1' )
+        {
+            // Return generic error message if configured
+            return new WP_Error('authentication_failed', __('<strong>ERROR</strong>: Invalid login credentials.', 'all-in-one-wp-security-and-firewall'));
+        }
+
+        return $user;
+    }
+
 
     /*
      * This function queries the aiowps_failed_logins table and returns the number of failures for current IP range within allowed failure period
