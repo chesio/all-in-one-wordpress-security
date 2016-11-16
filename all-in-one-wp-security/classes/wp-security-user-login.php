@@ -15,6 +15,8 @@ class AIOWPSecurity_User_Login
         remove_filter('authenticate', 'wp_authenticate_username_password', 20, 3);
         remove_filter('authenticate', 'wp_authenticate_email_password', 20, 3);
         add_filter('authenticate', array(&$this, 'aiowp_auth_login'), 10, 3);
+        // Check whether user needs to be manually approved after default WordPress authenticate hooks (with priority 20).
+        add_filter('authenticate', array($this, 'check_manual_registration_approval'), 30, 1);
         // As a last authentication step, perform post authentication steps
         add_filter('authenticate', array($this, 'post_authenticate'), 100, 3);
         add_action('aiowps_force_logout_check', array(&$this, 'aiowps_force_logout_action_handler'));
@@ -122,18 +124,39 @@ class AIOWPSecurity_User_Login
         {
             return new WP_Error('incorrect_password', sprintf(__('<strong>ERROR</strong>: Incorrect password. <a href="%s" title="Password Lost and Found">Lost your password</a>?', 'all-in-one-wp-security-and-firewall'), site_url('wp-login.php?action=lostpassword', 'login')));
         }
-        
+
+        $user =  new WP_User($userdata->ID);
+        return $user;
+    }
+
+
+    /**
+     * Check, whether $user needs to be manually approved by site admin yet.
+     * @global AIO_WP_Security $aio_wp_security
+     * @param WP_Error|WP_User $user
+     * @param string $username
+     * @param string $password
+     * @return WP_Error|WP_User
+     */
+    function check_manual_registration_approval($user)
+    {
+        global $aio_wp_security;
+
+        if ( !($user instanceof WP_User) ) {
+            // Not a WP_User - nothing to do here.
+            return $user;
+        }
+
         //Check if auto pending new account status feature is enabled
         if ($aio_wp_security->configs->get_value('aiowps_enable_manual_registration_approval') == '1')
         {
-                $cap_key_name = $wpdb->prefix.'capabilities';
-                $user_meta_info = get_user_meta($userdata->ID, 'aiowps_account_status', TRUE);
-                if ($user_meta_info == 'pending'){
-                    //Return generic error message if configured
-                    return new WP_Error('authentication_failed', __('<strong>ACCOUNT PENDING</strong>: Your account is currently not active. An administrator needs to activate your account before you can login.', 'all-in-one-wp-security-and-firewall'));
-                }
+            $user_meta_info = get_user_meta($user->ID, 'aiowps_account_status', TRUE);
+            if ($user_meta_info == 'pending') {
+                // Account needs to be activated yet
+                return new WP_Error('account_pending', __('<strong>ACCOUNT PENDING</strong>: Your account is currently not active. An administrator needs to activate your account before you can login.', 'all-in-one-wp-security-and-firewall'));
+            }
         }
-        $user =  new WP_User($userdata->ID);
+
         return $user;
     }
     
@@ -177,6 +200,11 @@ class AIOWPSecurity_User_Login
 
         if ( empty($username) || empty($password) ) {
             return $user;
+        }
+
+        if ( $user->get_error_code() === 'account_pending' ) {
+            // Neither log nor block users attempting to log in before their registration is approved.
+            return;
         }
 
         // Login failed for non-trivial reason
