@@ -17,6 +17,8 @@ class AIOWPSecurity_User_Login
         add_filter('authenticate', array(&$this, 'aiowp_auth_login'), 10, 3);
         // Check whether user needs to be manually approved after default WordPress authenticate hooks (with priority 20).
         add_filter('authenticate', array($this, 'check_manual_registration_approval'), 30, 1);
+        // Check login captcha
+        add_filter('authenticate', array($this, 'check_manual_registration_approval'), 30, 1);
         // As a last authentication step, perform post authentication steps
         add_filter('authenticate', array($this, 'post_authenticate'), 100, 3);
         add_action('aiowps_force_logout_check', array(&$this, 'aiowps_force_logout_action_handler'));
@@ -61,25 +63,27 @@ class AIOWPSecurity_User_Login
 	}
 
 
-    /*
-     * This function will take care of the authentication operations
-     * It will return a WP_User object if successful or WP_Error if not
+    /**
+     * Check login captcha (if enabled).
+     * @global AIO_WP_Security $aio_wp_security
+     * @param WP_Error|WP_User $user
+     * @return WP_Error|WP_User
      */
-    function aiowp_auth_login($user, $username, $password)
+    function check_captcha($user)
     {
-        global $wpdb, $aio_wp_security;
+        global $aio_wp_security;
+
+        if ( is_wp_error($user) ) {
+            // Authentication has failed already at some earlier step.
+            return $user;
+        }
 
         //Check if captcha enabled
         if ($aio_wp_security->configs->get_value('aiowps_enable_login_captcha') == '1')
         {
-            if (array_key_exists('aiowps-captcha-answer', $_POST)) //If the login form with captcha was submitted then do some processing
+            if ( isset($_POST['aiowps-captcha-answer']) ) //If the login form with captcha was submitted then do some processing
             {
-                if(isset($_POST['aiowps-captcha-answer'])){
-                    $captcha_answer = strip_tags(trim($_POST['aiowps-captcha-answer']));
-                }else{
-                    $captcha_answer = '';
-                }
-                //isset($_POST['aiowps-captcha-answer'])?($captcha_answer = strip_tags(trim($_POST['aiowps-captcha-answer']))):($captcha_answer = '');
+                $captcha_answer = strip_tags(trim($_POST['aiowps-captcha-answer']));
                 $captcha_secret_string = $aio_wp_security->configs->get_value('aiowps_captcha_secret_key');
                 $submitted_encoded_string = base64_encode($_POST['aiowps-captcha-temp-string'].$captcha_secret_string.$captcha_answer);
                 $trans_handle = sanitize_text_field($_POST['aiowps-captcha-string-info']);
@@ -94,9 +98,21 @@ class AIOWPSecurity_User_Login
                 return new WP_Error('authentication_failed', __('<strong>ERROR</strong>: Your answer was incorrect - please try again.', 'all-in-one-wp-security-and-firewall'));
             }
         }
-        
+
+		return $user;
+    }
+
+
+    /*
+     * This function will take care of the authentication operations
+     * It will return a WP_User object if successful or WP_Error if not
+     */
+    function aiowp_auth_login($user, $username, $password)
+    {
+        global $wpdb, $aio_wp_security;
+
         if ( is_a($user, 'WP_User') ) { return $user; } //Existing WP core code
-        
+
         if ( empty($username) || empty($password) ) { //Existing WP core code
             $error = new WP_Error();
             if (empty($username)){
