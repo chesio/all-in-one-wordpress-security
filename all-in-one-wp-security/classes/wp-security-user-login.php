@@ -325,10 +325,10 @@ class AIOWPSecurity_User_Login
         {
             $subject = '['.get_option('home').'] '. __('Site Lockout Notification','all-in-one-wp-security-and-firewall');
             $email_msg .= __('A lockdown event has occurred due to too many failed login attempts or invalid username:','all-in-one-wp-security-and-firewall')."\n";
-            $email_msg .= __('Username: '.($username?$username:"Unknown"),'all-in-one-wp-security-and-firewall')."\n";
-            $email_msg .= __('IP Address: '.$ip,'all-in-one-wp-security-and-firewall')."\n\n";
-            $email_msg .= __('IP Range: '.$ip_range.'.*','all-in-one-wp-security-and-firewall')."\n\n";
-            $email_msg .= __('Log into your site\'s WordPress administration panel to see the duration of the lockout or to unlock the user.','all-in-one-wp-security-and-firewall')."\n";
+            $email_msg .= __('Username:', 'all-in-one-wp-security-and-firewall') . ' ' . $username . "\n";
+            $email_msg .= __('IP Address:', 'all-in-one-wp-security-and-firewall') . ' ' . $ip . "\n\n";
+            $email_msg .= __('IP Range:', 'all-in-one-wp-security-and-firewall') . ' ' . $ip_range . '.*' . "\n\n";
+            $email_msg .= __("Log into your site's WordPress administration panel to see the duration of the lockout or to unlock the user.','all-in-one-wp-security-and-firewall") . "\n";
             $site_title = get_bloginfo( 'name' );
             $from_name = empty($site_title)?'WordPress':$site_title;
             $email_header = 'From: '.$from_name.' <'.get_bloginfo('admin_email').'>' . "\r\n\\";
