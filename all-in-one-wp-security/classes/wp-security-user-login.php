@@ -237,20 +237,21 @@ class AIOWPSecurity_User_Login
         return $login_failures;
     }
 
-    /*
-     * Adds an entry to the aiowps_lockdowns table
+    /**
+     * Adds an entry to the `aiowps_login_lockdown` table.
+     * @param string $username User's username or email
+     * @param string $lock_reason
      */
-    function lock_the_user($username='', $lock_reason='login_fail')
+    function lock_the_user($username, $lock_reason='login_fail')
     {
         global $wpdb, $aio_wp_security;
         $login_lockdown_table = AIOWPSEC_TBL_LOGIN_LOCKDOWN;
         $lockout_time_length = $aio_wp_security->configs->get_value('aiowps_lockout_time_length');
         $ip = AIOWPSecurity_Utility_IP::get_user_ip_address(); //Get the IP address of user
         $ip_range = AIOWPSecurity_Utility_IP::get_sanitized_ip_range($ip); //Get the IP range of the current user
-        if(empty($ip_range)) return false;
+        if(empty($ip_range)) return;
 
-        $username = sanitize_user($username);
-        $user = get_user_by('login', $username); //Returns WP_User object if exists
+        $user = is_email($username) ? get_user_by('email', $username) : get_user_by('login', $username); //Returns WP_User object if exists
         $ip_range = apply_filters('aiowps_before_lockdown', $ip_range);
         if ($user)
         {
@@ -258,11 +259,11 @@ class AIOWPSecurity_User_Login
             $user_id = $user->ID;
         } else {
             //If the login attempt was made using a non-existent user then let's set user_id to blank and record the attempted user login name for DB storage later on
-            $user_id = '';
+            $user_id = 0;
         }
         $ip_range_str = esc_sql($ip_range).'.*';
         $insert = "INSERT INTO " . $login_lockdown_table . " (user_id, user_login, lockdown_date, release_date, failed_login_IP, lock_reason) " .
-                        "VALUES ('" . $user_id . "', '" . $username . "', now(), date_add(now(), INTERVAL " .
+                        "VALUES (' . $user_id . ', '" . $username . "', now(), date_add(now(), INTERVAL " .
                         $lockout_time_length . " MINUTE), '" . $ip_range_str . "', '" . $lock_reason . "')";
         $result = $wpdb->query($insert);
         if ($result > 0)
@@ -277,10 +278,11 @@ class AIOWPSecurity_User_Login
         }
     }
 
-    /*
-     * Adds an entry to the aiowps_failed_logins table
+    /**
+     * Adds an entry to the `aiowps_failed_logins` table.
+     * @param string $username User's username or email
      */
-    function increment_failed_logins($username='')
+    function increment_failed_logins($username)
     {
         global $wpdb, $aio_wp_security;
         //$login_attempts_permitted = $aio_wp_security->configs->get_value('aiowps_max_login_attempts');
@@ -288,10 +290,9 @@ class AIOWPSecurity_User_Login
         $login_fails_table = AIOWPSEC_TBL_FAILED_LOGINS;
         $ip = AIOWPSecurity_Utility_IP::get_user_ip_address(); //Get the IP address of user
         $ip_range = AIOWPSecurity_Utility_IP::get_sanitized_ip_range($ip); //Get the IP range of the current user
-        if(empty($ip_range)) return false;
+        if(empty($ip_range)) return;
 
-        $username = sanitize_user($username);
-	    $user = get_user_by('login',$username); //Returns WP_User object if it exists
+        $user = is_email($username) ? get_user_by('email', $username) : get_user_by('login', $username); //Returns WP_User object if it exists
         if ($user)
         {
             //If the login attempt was made using a valid user set variables for DB storage later on
@@ -303,16 +304,16 @@ class AIOWPSecurity_User_Login
         $ip_range_str = esc_sql($ip_range).'.*';
         $now = date_i18n( 'Y-m-d H:i:s' );
         $data = array('user_id' => $user_id, 'user_login' => $username, 'failed_login_date' => $now, 'login_attempt_ip' => $ip_range_str);
-        $result = $wpdb->insert($login_fails_table, $data);
+        $format = array('%d', '%s', '%s', '%s');
+        $result = $wpdb->insert($login_fails_table, $data, $format);
         if ($result === FALSE)
         {
             $aio_wp_security->debug_logger->log_debug("Error inserting record into ".$login_fails_table,4);//Log the highly unlikely event of DB error
         }
-
     }
 
-    /*
-     * This function queries the aiowps_failed_logins table and returns the number of failures for current IP range within allowed failure period
+    /**
+     * @param string $username User's username or email
      */
     function send_ip_lock_notification_email($username, $ip_range, $ip)
     {
