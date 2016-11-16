@@ -12,9 +12,6 @@ class AIOWPSecurity_User_Login
         $this->initialize();
         // As a first authentication step, check if user's IP is locked.
         add_filter('authenticate', array($this, 'block_ip_if_locked'), 1, 0);
-        remove_filter('authenticate', 'wp_authenticate_username_password', 20, 3);
-        remove_filter('authenticate', 'wp_authenticate_email_password', 20, 3);
-        add_filter('authenticate', array(&$this, 'aiowp_auth_login'), 10, 3);
         // Check whether user needs to be manually approved after default WordPress authenticate hooks (with priority 20).
         add_filter('authenticate', array($this, 'check_manual_registration_approval'), 30, 1);
         // Check login captcha
@@ -100,49 +97,6 @@ class AIOWPSecurity_User_Login
         }
 
 		return $user;
-    }
-
-
-    /*
-     * This function will take care of the authentication operations
-     * It will return a WP_User object if successful or WP_Error if not
-     */
-    function aiowp_auth_login($user, $username, $password)
-    {
-        global $wpdb, $aio_wp_security;
-
-        if ( is_a($user, 'WP_User') ) { return $user; } //Existing WP core code
-
-        if ( empty($username) || empty($password) ) { //Existing WP core code
-            $error = new WP_Error();
-            if (empty($username)){
-                $error->add('empty_username', __('<strong>ERROR</strong>: The username field is empty.', 'all-in-one-wp-security-and-firewall'));
-            }
-
-            if (empty($password)){
-                $error->add('empty_password', __('<strong>ERROR</strong>: The password field is empty.', 'all-in-one-wp-security-and-firewall'));
-            }
-            return $error;
-        }
-        
-        $userdata = get_user_by('login',$username);
-        if (!$userdata) 
-        {
-            return new WP_Error('invalid_username', __('<strong>ERROR</strong>: Invalid username.', 'all-in-one-wp-security-and-firewall'));
-        }
-
-        $userdata = apply_filters('wp_authenticate_user', $userdata, $password); //Existing WP core code
-        if ( is_wp_error($userdata) ) { //Existing WP core code
-                return $userdata;
-        }
-
-        if ( !wp_check_password($password, $userdata->user_pass, $userdata->ID) ) 
-        {
-            return new WP_Error('incorrect_password', sprintf(__('<strong>ERROR</strong>: Incorrect password. <a href="%s" title="Password Lost and Found">Lost your password</a>?', 'all-in-one-wp-security-and-firewall'), site_url('wp-login.php?action=lostpassword', 'login')));
-        }
-
-        $user =  new WP_User($userdata->ID);
-        return $user;
     }
 
 
