@@ -9,24 +9,18 @@ class AIOWPSecurity_User_Login
 
     function __construct()
     {
-        $this->initialize();
+        $this->key_login_msg = 'aiowps_login_msg_id';
         // As a first authentication step, check if user's IP is locked.
         add_filter('authenticate', array($this, 'block_ip_if_locked'), 1, 0);
         // Check whether user needs to be manually approved after default WordPress authenticate hooks (with priority 20).
         add_filter('authenticate', array($this, 'check_manual_registration_approval'), 30, 1);
         // Check login captcha
-        add_filter('authenticate', array($this, 'check_manual_registration_approval'), 30, 1);
+        add_filter('authenticate', array($this, 'check_captcha'), 30, 1);
         // As a last authentication step, perform post authentication steps
         add_filter('authenticate', array($this, 'post_authenticate'), 100, 3);
-        add_action('aiowps_force_logout_check', array(&$this, 'aiowps_force_logout_action_handler'));
-        //add_action('wp_login', array(&$this, 'wp_login_action_handler'), 10, 2);
-        add_action('clear_auth_cookie', array(&$this, 'wp_logout_action_handler'));
-        add_filter('login_message', array(&$this, 'aiowps_login_message')); //WP filter to add or modify messages on the login page
-    }
-    
-    protected function initialize()
-    {
-        $this->key_login_msg = 'aiowps_login_msg_id';
+        add_action('aiowps_force_logout_check', array($this, 'aiowps_force_logout_action_handler'));
+        add_action('clear_auth_cookie', array($this, 'wp_logout_action_handler'));
+        add_filter('login_message', array($this, 'aiowps_login_message')); //WP filter to add or modify messages on the login page
     }
 
 
@@ -36,7 +30,8 @@ class AIOWPSecurity_User_Login
      *
      * @global AIO_WP_Security $aio_wp_security
      */
-    function block_ip_if_locked() {
+    function block_ip_if_locked()
+    {
         global $aio_wp_security;
 
         $user_locked = $this->check_locked_user();
@@ -120,32 +115,14 @@ class AIOWPSecurity_User_Login
         //Check if auto pending new account status feature is enabled
         if ($aio_wp_security->configs->get_value('aiowps_enable_manual_registration_approval') == '1')
         {
-            $user_meta_info = get_user_meta($user->ID, 'aiowps_account_status', TRUE);
-            if ($user_meta_info == 'pending') {
+            $aiowps_account_status = get_user_meta($user->ID, 'aiowps_account_status', TRUE);
+            if ($aiowps_account_status == 'pending') {
                 // Account needs to be activated yet
                 return new WP_Error('account_pending', __('<strong>ACCOUNT PENDING</strong>: Your account is currently not active. An administrator needs to activate your account before you can login.', 'all-in-one-wp-security-and-firewall'));
             }
         }
 
         return $user;
-    }
-    
-    /*
-     * This function queries the aiowps_login_lockdown table.
-     * If the release_date has not expired AND the current visitor IP addr matches
-     * it will return a record 
-     */
-    function check_locked_user()
-    {
-        global $wpdb;
-        $login_lockdown_table = AIOWPSEC_TBL_LOGIN_LOCKDOWN;
-        $ip = AIOWPSecurity_Utility_IP::get_user_ip_address(); //Get the IP address of user
-        $ip_range = AIOWPSecurity_Utility_IP::get_sanitized_ip_range($ip); //Get the IP range of the current user
-        if(empty($ip_range)) return false;
-        $locked_user = $wpdb->get_row("SELECT * FROM $login_lockdown_table " .
-                                        "WHERE release_date > now() AND " .
-                                        "failed_login_ip LIKE '" . esc_sql($ip_range) . "%'", ARRAY_A);
-        return $locked_user;
     }
 
 
@@ -165,10 +142,12 @@ class AIOWPSecurity_User_Login
         global $aio_wp_security;
 
         if ( !is_wp_error($user) ) {
+            // Authentication has been successful, there's nothing to do here.
             return $user;
         }
 
         if ( empty($username) || empty($password) ) {
+            // Neither log nor block login attempts with empty username or password.
             return $user;
         }
 
@@ -213,6 +192,25 @@ class AIOWPSecurity_User_Login
         }
 
         return $user;
+    }
+
+
+    /*
+     * This function queries the aiowps_login_lockdown table.
+     * If the release_date has not expired AND the current visitor IP addr matches
+     * it will return a record
+     */
+    function check_locked_user()
+    {
+        global $wpdb;
+        $login_lockdown_table = AIOWPSEC_TBL_LOGIN_LOCKDOWN;
+        $ip = AIOWPSecurity_Utility_IP::get_user_ip_address(); //Get the IP address of user
+        $ip_range = AIOWPSecurity_Utility_IP::get_sanitized_ip_range($ip); //Get the IP range of the current user
+        if(empty($ip_range)) return false;
+        $locked_user = $wpdb->get_row("SELECT * FROM $login_lockdown_table " .
+                                        "WHERE release_date > now() AND " .
+                                        "failed_login_ip LIKE '" . esc_sql($ip_range) . "%'", ARRAY_A);
+        return $locked_user;
     }
 
 
@@ -317,12 +315,11 @@ class AIOWPSecurity_User_Login
     {
         global $aio_wp_security;
         $email_notification_enabled = $aio_wp_security->configs->get_value('aiowps_enable_email_notify');
-        $to_email_address = $aio_wp_security->configs->get_value('aiowps_email_address');
-        $email_msg = '';
         if ($email_notification_enabled == 1)
         {
+            $to_email_address = $aio_wp_security->configs->get_value('aiowps_email_address');
             $subject = '['.get_option('home').'] '. __('Site Lockout Notification','all-in-one-wp-security-and-firewall');
-            $email_msg .= __('A lockdown event has occurred due to too many failed login attempts or invalid username:','all-in-one-wp-security-and-firewall')."\n";
+            $email_msg = __('A lockdown event has occurred due to too many failed login attempts or invalid username:','all-in-one-wp-security-and-firewall')."\n";
             $email_msg .= __('Username:', 'all-in-one-wp-security-and-firewall') . ' ' . $username . "\n";
             $email_msg .= __('IP Address:', 'all-in-one-wp-security-and-firewall') . ' ' . $ip . "\n\n";
             $email_msg .= __('IP Range:', 'all-in-one-wp-security-and-firewall') . ' ' . $ip_range . '.*' . "\n\n";
