@@ -7,9 +7,11 @@ class AIOWPSecurity_User_Login
      */
     var $key_login_msg;
 
-    function __construct() 
+    function __construct()
     {
         $this->initialize();
+        // As a first authentication step, check if user's IP is locked.
+        add_filter('authenticate', array($this, 'block_ip_if_locked'), 1, 0);
         remove_filter('authenticate', 'wp_authenticate_username_password', 20, 3);
         remove_filter('authenticate', 'wp_authenticate_email_password', 20, 3);
         add_filter('authenticate', array(&$this, 'aiowp_auth_login'), 10, 3);
@@ -25,6 +27,36 @@ class AIOWPSecurity_User_Login
     }
 
 
+    /**
+     * Terminate the execution via wp_die with 503 status code, if current
+     * user's IP is currently locked.
+     *
+     * @global AIO_WP_Security $aio_wp_security
+     */
+    function block_ip_if_locked() {
+        global $aio_wp_security;
+
+        $user_locked = $this->check_locked_user();
+
+        if ( $user_locked != NULL ) {
+
+            $aio_wp_security->debug_logger->log_debug("Login attempt from blocked IP range - ".$user_locked['failed_login_ip'],2);
+
+            // Allow the error message to be filtered.
+            $error_msg = apply_filters( 'aiowps_ip_blocked_error_msg', __('<strong>ERROR</strong>: Access from your IP address has been blocked for security reasons. Please contact the administrator.', 'all-in-one-wp-security-and-firewall') );
+
+            // If unlock requests are allowed, add the "Request Unlock" button to the message.
+            if( $aio_wp_security->configs->get_value('aiowps_allow_unlock_requests') == '1' )
+            {
+                $error_msg .= $this->get_unlock_request_form();
+            }
+
+            wp_die($error_msg, __('Service Temporarily Unavailable', 'all-in-one-wp-security-and-firewall'), 503);
+        }
+
+	}
+
+
     /*
      * This function will take care of the authentication operations
      * It will return a WP_User object if successful or WP_Error if not
@@ -33,23 +65,7 @@ class AIOWPSecurity_User_Login
     {
         global $wpdb, $aio_wp_security;
         $login_attempts_permitted = $aio_wp_security->configs->get_value('aiowps_max_login_attempts');
-        
-        $user_locked = $this->check_locked_user();
-        if ($user_locked != NULL) {
-            if($aio_wp_security->configs->get_value('aiowps_allow_unlock_requests')=='1')
-            {
-                add_action('login_form', array(&$this, 'insert_unlock_request_form'));
-                add_action('woocommerce_login_form', array(&$this, 'insert_unlock_request_form'));
-            }
-            $aio_wp_security->debug_logger->log_debug("Login attempt from blocked IP range - ".$user_locked['failed_login_ip'],2);
-            $error_msg = __('<strong>ERROR</strong>: Login failed because your IP address has been blocked. Please contact the administrator.', 'all-in-one-wp-security-and-firewall');
-            $error_msg = apply_filters( 'aiowps_ip_blocked_error_msg', $error_msg );
-            return new WP_Error('authentication_failed', $error_msg);
-            //$unlock_msg_form = $this->user_unlock_message();
-            //return new WP_Error('authentication_failed', __('<strong>ERROR</strong>: Login failed because your IP address has been blocked.
-              //                  Please contact the administrator.', 'all-in-one-wp-security-and-firewall').$unlock_msg_form);
-        }
-        
+
         //Check if captcha enabled
         if ($aio_wp_security->configs->get_value('aiowps_enable_login_captcha') == '1')
         {
@@ -557,9 +573,14 @@ class AIOWPSecurity_User_Login
         }
         return $message;
     }
-    
-    //This function will generate an unlock request button which to be inserted inside the wp-login form when user gets locked out
-    function insert_unlock_request_form()
+
+    /**
+     * This function will generate an unlock request form to be inserted inside
+     * error message when user gets locked out.
+     *
+     * @return string
+     */
+    function get_unlock_request_form()
     {
         global $aio_wp_security;
         $unlock_request_form = '';
@@ -567,11 +588,11 @@ class AIOWPSecurity_User_Login
         $unlock_secret_string = $aio_wp_security->configs->get_value('aiowps_unlock_request_secret_key');
         $current_time = time();
         $enc_result = base64_encode($current_time.$unlock_secret_string);
-        
-        $unlock_request_form .= '<div style="padding-bottom:10px;"><input type="hidden" name="aiowps-unlock-string-info" id="aiowps-unlock-string-info" value="'.$enc_result.'" />';
+
+        $unlock_request_form .= '<form method="post" action=""><div style="padding-bottom:10px;"><input type="hidden" name="aiowps-unlock-string-info" id="aiowps-unlock-string-info" value="'.$enc_result.'" />';
         $unlock_request_form .= '<input type="hidden" name="aiowps-unlock-temp-string" id="aiowps-unlock-temp-string" value="'.$current_time.'" />';
-        $unlock_request_form .= '<button type="submit" name="aiowps_unlock_request" id="aiowps_unlock_request" class="button">'.__('Request Unlock', 'all-in-one-wp-security-and-firewall').'</button></div>';
-        echo $unlock_request_form;
+        $unlock_request_form .= '<button type="submit" name="aiowps_unlock_request" id="aiowps_unlock_request" class="button">'.__('Request Unlock', 'all-in-one-wp-security-and-firewall').'</button></div></form>';
+        return $unlock_request_form;
     }
-    
+
 }
